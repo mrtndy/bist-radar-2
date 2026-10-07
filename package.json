@@ -12,7 +12,8 @@
     "build": "next build",
     "start": "next start",
     "scan": "node scripts/scan.ts",
-    "parity": "node scripts/parity.ts"
+    "parity": "node scripts/parity.ts",
+    "test": "node --test \"tests/**/*.test.ts\""
   },
   "dependencies": {
     "@phosphor-icons/react": "^2.1.10",

@@ -30,23 +30,63 @@ export interface PendingImport {
   symbols: string[];
 }
 
-function normalizeSymbols(raw: unknown): string[] {
+/** Takip listesinin en fazla uzunluğu — kötü niyetli/bozuk bir `?takip=` bağlantısı
+ * binlerce sembolle localStorage'ı şişirmesin ve arayüzü yavaşlatmasın diye. */
+export const MAX_SYMBOLS = 200;
+
+/** BIST kodları yalnızca ASCII harf/rakamdır (2-8 karakter); bunun dışındaki her şey çöp. */
+const TICKER_RE = /^[A-Z0-9]{2,8}$/;
+
+/** Türkçe harflerin ASCII karşılıkları. Büyük/küçük i ve ı hepsi "I"ya gider: yerel ayarlı
+ * `toLocaleUpperCase("tr")` "bimas"ı "BİMAS"a (noktalı İ) çevirirdi ve paylaşılan bağlantılar
+ * hiçbir hisseyle eşleşmezdi. */
+const TR_TO_ASCII: Record<string, string> = {
+  "ı": "I", "İ": "I", "i": "I", "I": "I",
+  "ş": "S", "Ş": "S",
+  "ğ": "G", "Ğ": "G",
+  "ü": "U", "Ü": "U",
+  "ö": "O", "Ö": "O",
+  "ç": "C", "Ç": "C",
+};
+
+/** `"bimas"` -> `"BIMAS"`, `"BİMAS"` -> `"BIMAS"`. Geçersizse (ASCII harf/rakam 2-8 değilse) `null`. */
+export function toTickerSymbol(item: string): string | null {
+  // NFC: "I" + birleştirici nokta (U+0307) dizisini tek "İ" karakterine toplar (tabloda var).
+  const upper = item
+    .trim()
+    .normalize("NFC")
+    .replace(/./gu, (ch) => TR_TO_ASCII[ch] ?? ch.toUpperCase());
+  return TICKER_RE.test(upper) ? upper : null;
+}
+
+/** Ham değerden temiz sembol listesi: ASCII büyük harf, geçersizler atılır, tekrarlar elenir,
+ * en fazla `MAX_SYMBOLS` sembol (ilk gelenler kalır). */
+export function normalizeSymbols(raw: unknown): string[] {
   if (!Array.isArray(raw)) return [];
   const seen = new Set<string>();
   const out: string[] = [];
   for (const item of raw) {
     if (typeof item !== "string") continue;
-    const s = item.trim().toLocaleUpperCase("tr");
+    const s = toTickerSymbol(item);
     if (!s || seen.has(s)) continue;
     seen.add(s);
     out.push(s);
+    if (out.length >= MAX_SYMBOLS) break;
   }
   return out;
 }
 
-/** `"THYAO,GARAN, bimas"` -> `["THYAO","GARAN","BIMAS"]` (boşlar atılır, tekrar elenir). */
-function parseTakipParam(raw: string): string[] {
+/** `"THYAO,GARAN, bimas"` -> `["THYAO","GARAN","BIMAS"]` (ASCII büyük harf; boşlar/geçersizler
+ * atılır, tekrar elenir, en fazla 200). */
+export function parseTakipParam(raw: string): string[] {
   return normalizeSymbols(raw.split(","));
+}
+
+/** Bilinen sembol kümesi verilmişse (ve boş değilse) yalnızca ona ait olanları bırakır.
+ * Küme boşsa (tarama verisi henüz yüklenmedi) süzme YAPILMAZ. */
+export function filterKnownSymbols(symbols: string[], known?: ReadonlySet<string>): string[] {
+  if (!known || known.size === 0) return symbols;
+  return symbols.filter((s) => known.has(s));
 }
 
 /** localStorage'dan oku — engelliyse (gizli sekme/kota/izin) veya JSON bozuksa sessizce []. */
@@ -89,8 +129,10 @@ export interface UseWatchlistResult {
   toggle: (symbol: string) => void;
   /** URL'den gelen ve localStorage doluyken kullanıcıya sorulması gereken liste (yoksa null). */
   pendingImport: PendingImport | null;
-  /** Üç seçenekten biri (görev metni): birleştir / değiştir / yoksay. Her durumda URL temizlenir. */
-  resolvePendingImport: (choice: "merge" | "replace" | "ignore") => void;
+  /** Üç seçenekten biri (görev metni): birleştir / değiştir / yoksay. Her durumda URL temizlenir.
+   * `known` (tarama satırlarındaki semboller) verilirse bağlantıdaki bilinmeyen semboller atılır;
+   * hiç bilinen sembol kalmazsa "değiştir" listeyi BOŞALTMAZ, yoksay gibi davranır. */
+  resolvePendingImport: (choice: "merge" | "replace" | "ignore", known?: ReadonlySet<string>) => void;
 }
 
 export function useWatchlist(): UseWatchlistResult {
@@ -145,10 +187,13 @@ export function useWatchlist(): UseWatchlistResult {
   }, []);
 
   const resolvePendingImport = useCallback(
-    (choice: "merge" | "replace" | "ignore") => {
+    (choice: "merge" | "replace" | "ignore", known?: ReadonlySet<string>) => {
       if (pendingImport) {
-        if (choice === "merge") persist(normalizeSymbols([...symbols, ...pendingImport.symbols]));
-        else if (choice === "replace") persist(pendingImport.symbols);
+        const incoming = filterKnownSymbols(pendingImport.symbols, known);
+        if (incoming.length === 0) {
+          // Bağlantıda tanınan hisse yok: hiçbir şeye dokunma (özellikle "değiştir" listeyi silmesin).
+        } else if (choice === "merge") persist(normalizeSymbols([...symbols, ...incoming]));
+        else if (choice === "replace") persist(incoming);
         // "ignore": listeye dokunma.
       }
       cleanUrl();

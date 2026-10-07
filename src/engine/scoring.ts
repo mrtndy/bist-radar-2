@@ -3,7 +3,7 @@
  * fonksiyonunun birebir portu. Puanlar, eşikler ve Türkçe gerekçe metinleri
  * orijinaliyle karakter düzeyinde aynıdır; `tests/parity.test.ts` bunu doğrular.
  */
-import type { Indicators, Score, ScoreComponent, Signal, Timeframe } from "./types.ts";
+import type { IndicatorSnapshot, Score, ScoreComponent, Signal, Timeframe } from "./types.ts";
 
 /** Sinyal eşikleri — handoff README: AL >= 65 (55-80 aralığında ayarlanabilir), SAT <= 38. */
 export const SIGNAL_THRESHOLDS = { buy: 65, sell: 38 } as const;
@@ -40,7 +40,7 @@ const tr1 = (x: number): string => x.toFixed(1).replace(".", ",");
  * @param tf Zaman dilimi — yalnızca ATR eşiklerini ölçekler (bkz. `ATR_TIMEFRAME_SCALE`).
  *           Varsayılan `"G"`, prototipin `scoreOf(d)` davranışıyla birebir aynıdır.
  */
-export function scoreOf(d: Indicators, tf: Timeframe = "G"): Score {
+export function scoreOf(d: IndicatorSnapshot, tf: Timeframe = "G"): Score {
   const B: ScoreComponent[] = [];
   const add = (k: string, p: number, n: string) => B.push({ k, p, n });
   const atrK = ATR_TIMEFRAME_SCALE[tf] ?? 1;

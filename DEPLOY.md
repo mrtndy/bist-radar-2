@@ -1,5 +1,7 @@
 # GitHub Pages'e kurulum
 
+Bu belge **BIST Radar 2** (`mrtndy/bist-radar-2`) içindir; canlı v1 (`mrtndy/bist-radar`) ayrı kalır.
+
 Site sunucusuz çalışır: GitHub Actions her akşam veriyi çeker, hesabı yapar ve statik siteyi
 yayınlar. Senin bilgisayarının açık olmasına gerek yoktur.
 
@@ -16,8 +18,8 @@ public depodan yayın yapar (private depo için GitHub Pro gerekir). Projede par
 veriler zaten kamuya açık piyasa verisi.
 
 ```bash
-cd "/home/mrtydn/Desktop/projects/BIST hisse tarama platformu/bist-radar"
-git remote add origin https://github.com/<kullanıcı-adın>/bist-radar.git
+cd "<bu deponun yolu>/bist-radar-2"
+git remote add origin https://github.com/<kullanıcı-adın>/bist-radar-2.git
 git push -u origin main
 ```
 
@@ -27,20 +29,21 @@ git push -u origin main
 **3. İlk yayını elle tetikle.** Actions sekmesi → "Veriyi tazele ve yayınla" → *Run workflow*.
 İlk koşu ~8-10 dakika sürer (barların indirilmesi dahil).
 
-Site adresi: `https://<kullanıcı-adın>.github.io/bist-radar/`
+Site adresi: `https://<kullanıcı-adın>.github.io/bist-radar-2/` (basePath, workflow içinde depo adından otomatik türetilir)
 
 ## Zamanlama
 
-Hafta içi her gün **16:00 UTC = 19:00 TSİ**, yani BIST kapanışından ~50 dakika sonra.
+Şu an tek aktif zamanlama: hafta içi her gün **16:00 UTC = 19:00 TSİ**, yani BIST kapanışından ~50 dakika sonra (`cron: "0 16 * * 1-5"`). Seans içi 15 dakikalık cron (`*/15 7-15 * * 1-5`) `deploy.yml` içinde **yorum satırıdır**: v1 hâlâ canlı ve o cron'u çalıştırıyor; ikisi birlikte çalışırsa Yahoo trafiği ikiye katlanır. v2, v1'in yerine geçtiğinde o satırın `# ` işareti kaldırılır ve v1'in workflow'u kapatılır (adımlar için `README.md` başındaki "BIST Radar 2" bölümü).
 GitHub'ın zamanlanmış işleri yoğunlukta 5-30 dakika gecikebilir; gün sonu verisi için önemsiz.
 İstediğin an Actions sekmesinden elle de tetikleyebilirsin.
 
 ## Seans içinde elle tetiklersen
 
-Zamanlanmış koşu kapanıştan sonra çalıştığı için günlük barlar tamamlanmış olur. Ama Actions
-sekmesinden **seans sırasında** elle tetiklersen, o günün barı henüz kapanmamıştır: göstergeler
-yarım bar üzerinden hesaplanır ve sinyaller kapanışa kadar değişebilir. Yanlış değil — gün içi
-takip için istenen davranış bu — ama o an gördüğün sinyal geçicidir.
+Zamanlanmış koşu kapanıştan sonra çalıştığı için günlük barlar tamamlanmış olur. Seans
+sırasında tetiklenen bir koşuda o günün barı henüz kapanmamıştır. v2'de (2026-10-07) bu bar
+**sinyale katılmaz**: göstergeler ve AL/SAT bir önceki kapanmış bardan hesaplanır, yalnızca
+fiyat ve günlük değişim en yeni bardan gelir. Üst çubukta "(sinyal: … barı)" notu bunu
+gösterir. v1'de göstergeler yarım bar üzerinden hesaplanıyor ve sinyal gün içinde dönebiliyordu.
 
 Ayrıca veri her hâlükârda **15 dakika gecikmelidir** (2026-07-27 seans içinde ölçüldü: saat 15:51
 iken Yahoo'nun son 1 dakikalık barı 15:36). Emir vermeden önce canlı fiyata aracı kurum
@@ -66,13 +69,20 @@ Bu durumda seçenekler:
 - Veriyi kendi bilgisayarında üretip yalnızca sonucu (2,8 MB) push'lamak; Actions sadece yayınlar.
 - Cloudflare Workers gibi başka bir zamanlayıcıya taşımak.
 
+## Workflow güvenliği
+
+- **İzinler iş bazında:** üst düzey `contents: read`; `build` yalnızca okur, `deploy` yalnızca `pages: write` + `id-token: write`, `keepalive` yalnızca `contents: write` alır.
+- **Eylemler SHA'ya sabit:** her `uses:` tam commit SHA'sıdır, sürüm satır sonu yorumunda. Güncellemek için `gh api repos/<sahip>/<eylem>/git/ref/tags/<etiket>` ile yeni SHA'yı bul.
+- **Testler:** bağımlılıklardan sonra `npm test` ve `python -m unittest discover -s tests -p "test_*.py"` çalışır; biri kırılırsa Yahoo'ya hiç gidilmez.
+- **Python sürümleri sabit:** `ingest/requirements.txt` içinde `yfinance==1.7.0`, `curl_cffi==0.16.3`.
+
 ## Bilinen GitHub sınırları
 
 | | Sınır | Bizim durumumuz |
 |---|---|---|
 | Pages site boyutu | 1 GB | 2,8 MB |
 | Pages bant genişliği | 100 GB/ay (yumuşak) | tek kullanıcı |
-| Pages derleme | saatte 10 (yumuşak) | günde 1 |
+| Pages derleme | saatte 10 (yumuşak) | günde 1 (15 dk'lık cron açılırsa günde ~36 + akşam) |
 | Actions dakikası | public depoda ücretsiz | koşu başına ~8-10 dk |
 | Zamanlanmış iş | **60 gün commit gelmezse kapanır** | `keepalive` işi ayda bir boş commit atıyor |
 
@@ -81,7 +91,7 @@ sayıp saymadığı belgelerde net değil, bu yüzden ölçerek doğrulanmalı.
 
 ## Gün içi tazeleme istenirse
 
-Şu anki kurulum günde bir kez çalışır. Gün içinde de tazelemek teknik olarak mümkün ama GitHub
+Şu anki kurulum günde bir kez çalışır (seans içi cron terfiye kadar kapalı; bkz. Zamanlama). Gün içinde de tazelemek teknik olarak mümkün ama GitHub
 bunun için uygun değil: Pages'in saatte 10 derleme sınırı ve cron'un 5-30 dakikalık gecikmesi
 "15 dakikada bir" gibi bir hedefi güvenilmez kılıyor. Gerçekten gerekiyorsa Cloudflare Pages +
 Workers Cron daha uygun; orada kaynak private de kalabilir.

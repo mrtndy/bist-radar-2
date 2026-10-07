@@ -156,9 +156,13 @@ export default function ExcludedListModal({ tf, onClose }: ExcludedListModalProp
                 </div>
                 <div style={{ textAlign: "right", flex: "none", fontSize: 11.5 }}>
                   <div style={{ color: "var(--color-neutral-300)" }}>{REASON_LABEL[e.reason]}</div>
-                  <div style={{ color: "var(--color-neutral-500)", fontVariantNumeric: "tabular-nums" }}>
-                    {nfInt.format(e.bars)}/{nfInt.format(e.minBars)} bar
-                  </div>
+                  {/* Bar sayısı yalnızca "yetersiz bar" türü elemelerde anlamlı; bayat veri ve
+                      fiyat sıçramasında bar sayısı yeterlidir, "504/120 bar" kafa karıştırır. */}
+                  {e.reason !== "bayat-veri" && e.reason !== "fiyat-sicramasi" && (
+                    <div style={{ color: "var(--color-neutral-500)", fontVariantNumeric: "tabular-nums" }}>
+                      {nfInt.format(e.bars)}/{nfInt.format(e.minBars)} bar
+                    </div>
+                  )}
                 </div>
               </div>
             ))

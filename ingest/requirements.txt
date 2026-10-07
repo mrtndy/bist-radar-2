@@ -1,2 +1,5 @@
-yfinance>=1.5
-curl_cffi>=0.15
+# Sürümler BİLEREK tam sürüme sabitlendi (==): 2026-10-07'de yerelde çalıştığı doğrulanan sürümler.
+# Yahoo Finance sık sık değişiyor; aralıklı (>=) sürümle CI bir gün sessizce yeni bir sürüm çekip
+# bozulabilir. Güncellemek için: yerelde yeni sürümü dene, ingest'in çalıştığını doğrula, sonra burayı değiştir.
+yfinance==1.7.0
+curl_cffi==0.16.3

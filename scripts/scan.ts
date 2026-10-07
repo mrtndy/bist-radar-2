@@ -3,14 +3,19 @@
  * Üretimde bu iş bir API rotası/işçi tarafından yapılacak; bu script motorun gerçek
  * BIST verisiyle çalıştığını doğrulamak ve çıktıyı gözle kontrol etmek içindir.
  *
+ * Sembol başına mantık `lib/scan-data.ts` ile AYNI tek kopyadan gelir (`evaluateBars`:
+ * kapanmış bar kuralı + veri kalitesi kapısı + motor), böylece bu çıktı sitedeki tabloyla
+ * aynı skorları gösterir.
+ *
  * Çalıştır:  node scripts/scan.ts [--tf G] [--top 20]
  */
-import { readdir, readFile } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { indicators, MIN_BARS } from "../src/engine/indicators.ts";
-import { scoreOf, signalOf } from "../src/engine/scoring.ts";
-import type { Bar, Timeframe, UniverseEntry } from "../src/engine/types.ts";
+import { istanbulDate } from "../src/engine/bars.ts";
+import { listBarFiles, loadQualityContext, readRunTimes, referenceNow } from "../src/engine/data-files.ts";
+import { evaluateBars } from "../src/engine/evaluate.ts";
+import type { Timeframe, UniverseEntry } from "../src/engine/types.ts";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(HERE, "..");
@@ -28,8 +33,11 @@ const universe: UniverseEntry[] = JSON.parse(
 );
 const meta = new Map(universe.map((u) => [u.symbol, u]));
 
-const barDir = path.join(ROOT, "data/bars", tf);
-const files = (await readdir(barDir)).filter((f) => f.endsWith(".json"));
+const DATA_DIR = path.join(ROOT, "data");
+const barDir = path.join(DATA_DIR, "bars", tf);
+const files = await listBarFiles(DATA_DIR, tf);
+const now = referenceNow(await readRunTimes(DATA_DIR, tf));
+const quality = await loadQualityContext(DATA_DIR, tf);
 
 interface Row {
   sym: string;
@@ -46,6 +54,8 @@ interface Row {
   pctB: number;
   volTL: number;
   top: string;
+  signalAsOf: number;
+  lastBarClosed: boolean;
 }
 
 const rows: Row[] = [];
@@ -53,45 +63,39 @@ const skipped: Record<string, number> = {};
 
 for (const f of files) {
   const sym = f.replace(/\.json$/, "");
-  let bars: Bar[];
+  let bars: unknown;
   try {
     bars = JSON.parse(await readFile(path.join(barDir, f), "utf8"));
   } catch {
-    skipped.parse = (skipped.parse ?? 0) + 1;
+    skipped["veri-yok"] = (skipped["veri-yok"] ?? 0) + 1;
     continue;
   }
-  if (bars.length < MIN_BARS) {
-    skipped.tooFewBars = (skipped.tooFewBars ?? 0) + 1;
+  const ev = evaluateBars(sym, bars, tf, now, quality);
+  if (!ev.ok) {
+    skipped[ev.reason] = (skipped[ev.reason] ?? 0) + 1;
     continue;
   }
-  try {
-    const ind = indicators(bars, tf);
-    const { score, breakdown } = scoreOf(ind, tf);
-    if (!Number.isFinite(ind.price) || !Number.isFinite(score)) {
-      skipped.nonFinite = (skipped.nonFinite ?? 0) + 1;
-      continue;
-    }
-    const u = meta.get(sym);
-    const best = [...breakdown].sort((a, b) => b.p - a.p)[0];
-    rows.push({
-      sym,
-      name: u?.name ?? sym,
-      sector: u?.sector ?? "Diğer",
-      price: ind.price,
-      chg: ind.chg,
-      score,
-      signal: signalOf(score),
-      k: ind.k,
-      rsi: ind.rsi,
-      atrPct: ind.atrPct,
-      relVol: ind.relVol,
-      pctB: ind.pctB,
-      volTL: ind.volTL,
-      top: `${best.k} ${best.p >= 0 ? "+" : ""}${best.p} · ${best.n}`,
-    });
-  } catch (e) {
-    skipped.engineError = (skipped.engineError ?? 0) + 1;
-  }
+  const { ind, score, breakdown } = ev;
+  const u = meta.get(sym);
+  const best = [...breakdown].sort((a, b) => b.p - a.p)[0];
+  rows.push({
+    sym,
+    name: u?.name ?? sym,
+    sector: u?.sector ?? "Diğer",
+    price: ev.price,
+    chg: ev.chg,
+    score,
+    signal: ev.signal,
+    k: ind.k,
+    rsi: ind.rsi,
+    atrPct: ind.atrPct,
+    relVol: ind.relVol,
+    pctB: ind.pctB,
+    volTL: ind.volTL,
+    top: `${best.k} ${best.p >= 0 ? "+" : ""}${best.p} · ${best.n}`,
+    signalAsOf: ev.signalAsOf,
+    lastBarClosed: ev.lastBarClosed,
+  });
 }
 
 rows.sort((a, b) => b.score - a.score);
@@ -106,6 +110,23 @@ console.log(
     `  |  ${rows.length} hisse hesaplandı  |  AL ${counts["AL"] ?? 0} · NÖTR ${counts["NÖTR"] ?? 0} · SAT ${counts["SAT"] ?? 0}`,
 );
 if (Object.keys(skipped).length) console.log(`atlanan: ${JSON.stringify(skipped)}`);
+{
+  // Sinyal hangi bardan? Son bar seans içindeyse sinyal bir önceki kapanmış bardan gelir.
+  const fmt = (t: number) =>
+    tf === "S"
+      ? new Intl.DateTimeFormat("tr-TR", { timeZone: "Europe/Istanbul", dateStyle: "short", timeStyle: "short" }).format(t)
+      : istanbulDate(t);
+  // En sık sinyal barı (lib/scan-data.ts dosya meta'sıyla aynı tanım).
+  const freq = new Map<number, number>();
+  for (const r of rows) freq.set(r.signalAsOf, (freq.get(r.signalAsOf) ?? 0) + 1);
+  const asOf = [...freq].sort((a, b) => b[1] - a[1])[0]?.[0] ?? 0;
+  const open = rows.filter((r) => !r.lastBarClosed).length;
+  console.log(
+    `sinyal barı: ${asOf ? fmt(asOf) : "-"}  |  referans an: ${fmt(now)}  |  ` +
+      `son barı açık (sinyal önceki bardan): ${open}/${rows.length}  |  ` +
+      `kalite raporu: ${quality.own ? "uygulandı" : "YOK (kapı devre dışı)"}`,
+  );
+}
 console.log(
   "\n" +
     pad("SEMBOL", 8) + padL("FİYAT", 10) + padL("DEĞ%", 8) + padL("SKOR", 6) +

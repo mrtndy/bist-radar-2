@@ -85,6 +85,15 @@ export function formatLastUpdated(ms: number): string {
   return `${get("day")} ${month} ${get("hour")}:${get("minute")}`;
 }
 
+/**
+ * Sinyalin hesaplandığı barın etiketi. Günlük/haftalık barın zaman damgası günün başıdır
+ * (00:00), saat göstermek yanıltır — yalnızca gün + ay. Saatlikte saat de gösterilir.
+ */
+export function formatBarLabel(ms: number, tf: string): string {
+  const full = formatLastUpdated(ms);
+  return tf === "S" ? full : full.replace(/\s\d{2}:\d{2}$/, "");
+}
+
 /** Serbest metin sayı alanları için gevşek ayrıştırma — virgül veya nokta ondalık, boş = sınır yok. */
 export function parseLenient(raw: string): number | null {
   if (raw.trim() === "") return null;

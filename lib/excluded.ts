@@ -29,6 +29,9 @@ export const REASON_LABEL: Record<ExcludedReason, string> = {
   "az-bar": "Yetersiz geçmiş veri",
   "veri-yok": "Veri yok",
   "hesap-hatasi": "Hesap hatası",
+  // 2026-10-07 — veri kalitesi kapısı (bkz. src/engine/quality.ts): AL/SAT yerine eleme.
+  "bayat-veri": "Bayat veri",
+  "fiyat-sicramasi": "Şüpheli fiyat sıçraması",
 };
 
 const nfInt = new Intl.NumberFormat("tr-TR", { maximumFractionDigits: 0 });
@@ -107,6 +110,15 @@ export function excludedReasonText(e: ExcludedEntry): string {
       return "Bu sembol için hiç fiyat verisi bulunamadı.";
     case "hesap-hatasi":
       return "Bu sembol için göstergeler hesaplanamadı (veri sorunu).";
+    // Kalite kapısı sebepleri: motorun ürettiği ayrıntı cümlesi (`note`, tarih ve yüzde içerir)
+    // varsa o, yoksa genel cümle.
+    case "bayat-veri":
+      return e.note ?? "Bu sembolün son barı güncel değil; sinyal bayat veriden üretilmez.";
+    case "fiyat-sicramasi":
+      return (
+        e.note ??
+        "Göstergelerin penceresinde BIST fiyat marjını aşan bir hareket var (düzeltilmemiş bedelsiz/bölünme ya da veri hatası olabilir); sinyal verilmez."
+      );
     default:
       return "";
   }

@@ -14,10 +14,10 @@ import NewsList from "./NewsList";
 import WatchlistTab, { WatchlistEmptyState } from "./WatchlistTab";
 import ColumnMenu from "./ColumnMenu";
 import ExcludedListModal, { ExcludedCounterButton } from "./ExcludedList";
-import { formatLastUpdated, parseLenient } from "../lib/format";
+import { formatBarLabel, formatLastUpdated, parseLenient } from "../lib/format";
 import { fetchNewsFeed } from "../lib/news";
 import { usePortfolio } from "../lib/portfolio";
-import { useWatchlist } from "../lib/watchlist";
+import { filterKnownSymbols, useWatchlist } from "../lib/watchlist";
 import { COLUMN_LABELS, useColumnLayout } from "../lib/columns";
 import { SORT_NAMES } from "../lib/types";
 import type {
@@ -345,6 +345,15 @@ export default function ScanScreen({ initialTf, initialData }: ScanScreenProps) 
   const current = dataByTf[tf];
   const allRows = useMemo<RowData[]>(() => current?.rows ?? [], [current]);
   const sectorOptions = useMemo(() => ["Tümü", ...(current?.sectors ?? [])], [current]);
+  // Bağlantıdan gelen takip sembollerini süzmek için bilinen semboller (geçerli dilimin tarama
+  // satırları). Veri henüz yüklenmediyse küme boştur ve süzme yapılmaz (bkz. filterKnownSymbols).
+  const knownSymbols = useMemo<ReadonlySet<string>>(() => new Set(allRows.map((r) => r.symbol)), [allRows]);
+  const pendingKnownCount = pendingImport ? filterKnownSymbols(pendingImport.symbols, knownSymbols).length : 0;
+  // Bağlantıdaki hiçbir sembol tanınmıyorsa (veri yüklüyken) "0 hisse eklensin mi?" diye sorma:
+  // sessizce yoksay (URL temizlenir, liste değişmez).
+  useEffect(() => {
+    if (pendingImport && knownSymbols.size > 0 && pendingKnownCount === 0) resolvePendingImport("ignore");
+  }, [pendingImport, knownSymbols, pendingKnownCount, resolvePendingImport]);
 
   const filteredRows = useMemo(() => {
     const q = filters.q.trim().toLocaleLowerCase("tr");
@@ -468,7 +477,14 @@ export default function ScanScreen({ initialTf, initialData }: ScanScreenProps) 
   }
 
   const sortLabel = `${SORT_NAMES[sortKey]}${sortDir < 0 ? " (azalan)" : " (artan)"}`;
-  const lastUpdatedLabel = current?.fetchedAt != null ? formatLastUpdated(current.fetchedAt) : null;
+  // Seans içi koşuda son bar kapanmamıştır; sinyaller bir önceki KAPANMIŞ bardan gelir.
+  // Fiyat canlı (15 dk gecikmeli), sinyal ise o barın tarihine ait — bunu etikette söyle.
+  const updatedAt = current?.fetchedAt != null ? formatLastUpdated(current.fetchedAt) : null;
+  const signalNote =
+    current?.lastBarClosed === false && current.signalAsOf != null
+      ? ` (sinyal: ${formatBarLabel(current.signalAsOf, tf)} barı)`
+      : "";
+  const lastUpdatedLabel = updatedAt != null ? updatedAt + signalNote : null;
   const isLoading = loadingTf === tf && !current;
 
   return (
@@ -755,9 +771,9 @@ export default function ScanScreen({ initialTf, initialData }: ScanScreenProps) 
           cihazda açılırsa açılsın (çoğunlukla mobil, bkz. dış görev metni) çalışmalı. */}
       {pendingImport ? (
         <WatchlistImportPrompt
-          count={pendingImport.symbols.length}
-          onMerge={() => resolvePendingImport("merge")}
-          onReplace={() => resolvePendingImport("replace")}
+          count={knownSymbols.size > 0 ? pendingKnownCount : pendingImport.symbols.length}
+          onMerge={() => resolvePendingImport("merge", knownSymbols)}
+          onReplace={() => resolvePendingImport("replace", knownSymbols)}
           onIgnore={() => resolvePendingImport("ignore")}
         />
       ) : null}
@@ -794,6 +810,7 @@ function DelayStrip({ compact = false }: { compact?: boolean }) {
       */}
       <span style={{ fontSize: 14, lineHeight: compact ? 1.3 : 1.45, color: "var(--color-neutral-200)" }}>
         Veriler ~15 dakika gecikmelidir. Emir vermeden önce aracı kurumunuzdaki canlı fiyata bakın.
+        Yatırım tavsiyesi değildir.
       </span>
     </div>
   );

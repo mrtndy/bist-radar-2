@@ -35,7 +35,11 @@ export interface ChartSeries {
   labels: string[];
 }
 
-export interface Indicators {
+/**
+ * Tek bir bar indeksindeki gösterge skalerleri (grafik serisi hariç). `scoreOf()` yalnızca
+ * bunlara bakar; `scripts/study.ts` her gün için grafiksiz bu özeti kullanır.
+ */
+export interface IndicatorSnapshot {
   price: number;
   chg: number;
   k: number;
@@ -54,6 +58,9 @@ export interface Indicators {
   volTL: number;
   hi70: number;
   lo70: number;
+}
+
+export interface Indicators extends IndicatorSnapshot {
   chart: ChartSeries;
 }
 

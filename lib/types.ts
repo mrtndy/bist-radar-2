@@ -4,6 +4,7 @@
  * matematik tipi değil, sadece isimlendirme paylaşımı içindir.
  */
 import type { ChartSeries, ScoreComponent, Signal, Timeframe } from "../src/engine/types.ts";
+import type { ExclusionReason } from "../src/engine/evaluate.ts";
 import type { Importance } from "./news-importance";
 
 export type { ChartSeries, ScoreComponent, Signal, Timeframe };
@@ -47,6 +48,16 @@ export interface RowData {
    * bildirim script'i tarama script'inden önce/sonra çalışsa da derleme bozulmaz.
    */
   newsCount: number;
+  /**
+   * Sinyalin (skor, gösterge alanları, `topReason`) hesaplandığı KAPANMIŞ barın açılış zamanı
+   * (epoch ms). Son bar seans içindeyken (bkz. `src/engine/bars.ts`) bir önceki bardır.
+   */
+  signalAsOf: number;
+  /** En yeni bar veri çekildiği anda kapanmış mıydı? `false` = sinyal bir önceki bardan,
+   * `price`/`chg` ise henüz kapanmamış (15 dk gecikmeli) en yeni bardan. */
+  lastBarClosed: boolean;
+  /** `price`/`chg`nin geldiği en yeni barın açılış zamanı (epoch ms). */
+  priceAsOf: number;
 }
 
 export interface ScanResult {
@@ -57,6 +68,15 @@ export interface ScanResult {
   fetchedAt: number | null;
   /** Tüm evrendeki sektörlerin tr-locale sıralı listesi ("Tümü" hariç). */
   sectors: string[];
+  /** Satırların çoğunluğunun (en sık) `signalAsOf` değeri (epoch ms) — satır yoksa `null`. */
+  signalAsOf: number | null;
+  /** Satırların çoğunluğunda en yeni bar kapanmış mıydı? (`false` = seans içi koşu, sinyaller
+   * bir önceki kapanmış bardan.) Satır yoksa `null`. */
+  lastBarClosed: boolean | null;
+  /** Kapanmış bar kararında kullanılan referans an (ingest başlangıcı, epoch ms). */
+  evaluatedAt: number;
+  /** Veri kalitesi raporu (`data/bars/{tf}.quality.json`) bulunup uygulandı mı? */
+  qualityChecked: boolean;
 }
 
 export interface ScanApiResponse extends ScanResult {
@@ -65,11 +85,14 @@ export interface ScanApiResponse extends ScanResult {
 
 /**
  * Elenen (taranamayan) sembol sebep kodları — bkz. tasks/09-eleme-gorunurlugu.md §A.
- * "az-bar" = bar sayısı `minBars`in altında, "veri-yok" = bu dilim için bar dosyası hiç
- * yok (ya da okunamadı/bozuk — ayrı bir 5. kod YOK, en yakın karşılık bu), "hesap-hatasi"
- * = motor (`indicators`/`scoreOf`) istisna attı veya fiyat/skor sonlu değil.
+ * "az-bar" = KAPANMIŞ bar sayısı `minBars`in altında, "veri-yok" = bu dilim için bar dosyası
+ * hiç yok (ya da okunamadı/bozuk), "hesap-hatasi" = motor (`indicators`/`scoreOf`) istisna
+ * attı veya fiyat/skor sonlu değil. 2026-10-07 eklendi (veri kalitesi raporundan, bkz.
+ * `src/engine/quality.ts`): "bayat-veri" = son bar koşunun 3 seansından fazla gerisinde ya
+ * da bu koşuda Yahoo'dan inmedi; "fiyat-sicramasi" = göstergelerin son 70 barında şüpheli
+ * düzeltilmemiş bedelsiz/bölünme ya da veri hatası. Tek kaynak motordaki `ExclusionReason`.
  */
-export type ExcludedReason = "az-bar" | "veri-yok" | "hesap-hatasi";
+export type ExcludedReason = ExclusionReason;
 
 /**
  * Bir zaman diliminde taranamayan (MIN_BARS eşiğini geçemeyen / verisi olmayan / motor
@@ -89,6 +112,8 @@ export interface ExcludedEntry {
   firstBarAt: number | null;
   /** Bu sembolün BAŞARIYLA tarandığı diğer zaman dilimleri (bu tf hariç) — "başka dilime geç" düğmesi için. */
   availableIn: Timeframe[];
+  /** Kalite kapısının Türkçe ayrıntı cümlesi ("bayat-veri"/"fiyat-sicramasi" için dolu). */
+  note?: string;
 }
 
 /**
@@ -124,7 +149,12 @@ export interface DetailData {
   signal: Signal;
   /** `scoreOf(ind, tf)` çıktısı — gerekçe metinleri (`n`) motordan birebir gelir. */
   breakdown: ScoreComponent[];
+  /** Kapanmış barlardan çizilir (son bar seans içindeyse grafikte yer almaz). */
   chart: ChartSeries;
+  /** `RowData` ile aynı anlam — bkz. orada. */
+  signalAsOf: number;
+  lastBarClosed: boolean;
+  priceAsOf: number;
 }
 
 export type SignalFilter = "ALL" | "AL" | "SAT" | "NOTR";

@@ -8,12 +8,18 @@
  * farkı: süreç içi önbellek + zaman dilimi başına barların mtime imzasıyla
  * geçersizleştirme (bkz. tasks/01-nextjs-ui.md "Kapsam" §2). Motor dosyalarına
  * (`src/engine/**`) dokunulmaz, yalnızca içe aktarılır.
+ *
+ * 2026-10-07: sembol başına mantık (kapanmış bar kuralı + veri kalitesi kapısı + motor)
+ * artık `src/engine/evaluate.ts` `evaluateBars` içinde TEK kopya — `lib/detail.ts` ve
+ * `scripts/scan.ts` de aynısını çağırır. Sinyal/skor/göstergeler kapanmış barlardan,
+ * `price`/`chg` en yeni (seans içi olabilir) bardan gelir.
  */
-import { readdir, readFile, stat } from "node:fs/promises";
+import { readFile, stat } from "node:fs/promises";
 import path from "node:path";
-import { indicators, MIN_BARS } from "../src/engine/indicators.ts";
-import { scoreOf, signalOf } from "../src/engine/scoring.ts";
-import type { Bar, ScoreComponent, Timeframe, UniverseEntry } from "../src/engine/types.ts";
+import { listBarFiles, loadQualityContext, readRunTimes, referenceNow } from "../src/engine/data-files.ts";
+import { evaluateBars } from "../src/engine/evaluate.ts";
+import { MIN_BARS } from "../src/engine/indicators.ts";
+import type { ScoreComponent, Timeframe, UniverseEntry } from "../src/engine/types.ts";
 import type { ExcludedEntry, RowData, ScanResult } from "./types";
 
 const ROOT = process.cwd();
@@ -36,6 +42,10 @@ interface CacheEntry {
   rows: RowData[];
   excluded: ExcludedEntryBase[];
   fetchedAt: number | null;
+  /** Kapanmış bar kararının referans anı (ingest başlangıcı). */
+  evaluatedAt: number;
+  /** Kalite raporu bulundu mu (yoksa kapı devre dışı). */
+  qualityChecked: boolean;
 }
 
 const scanCache = new Map<Timeframe, CacheEntry>();
@@ -108,32 +118,24 @@ async function fingerprintDir(dir: string, files: string[]): Promise<string> {
   return stats.join("|");
 }
 
-async function readFetchedAt(tf: Timeframe): Promise<number | null> {
-  try {
-    const raw = await readFile(path.join(DATA_DIR, "bars", `${tf}.meta.json`), "utf8");
-    const meta = JSON.parse(raw) as { fetchedAt?: unknown };
-    return typeof meta.fetchedAt === "number" ? meta.fetchedAt : null;
-  } catch {
-    return null;
-  }
-}
-
 /**
  * Bar dosyalarını okuyup hem satırları HEM de elenen sembolleri üretir (bkz.
  * tasks/09-eleme-gorunurlugu.md §A — `computeRows` eskiden bunları sessizce `continue`
- * ile atlıyordu). Satır üretim MANTIĞI (üç aşamalı kapı: parse -> bar sayısı -> motor)
- * ESKİ `computeRows` ile birebir AYNI — yalnızca her `continue` noktasında artık NEDEN
- * bilgisi de kaydediliyor. MIN_BARS burada DEĞİŞTİRİLMEZ, yalnızca motordan içe aktarılan
- * sabit karşılaştırma için kullanılır (görev "Sert kısıtlar").
+ * ile atlıyordu). Kapı sırası: parse -> (evaluateBars:) kapanmış bar sayısı -> veri kalitesi
+ * (bayat / fiyat sıçraması) -> motor. Her elemede NEDEN kaydedilir. MIN_BARS burada
+ * DEĞİŞTİRİLMEZ, yalnızca motordan içe aktarılan sabit karşılaştırma için kullanılır.
+ * `now` = kapanmış bar kararının referans anı (bkz. `referenceNow`).
  */
 async function computeScan(
   tf: Timeframe,
   barDir: string,
   files: string[],
-): Promise<{ rows: RowData[]; excluded: ExcludedEntryBase[] }> {
+  now: number,
+): Promise<{ rows: RowData[]; excluded: ExcludedEntryBase[]; qualityChecked: boolean }> {
   const universe = await getUniverse();
   const meta = new Map(universe.map((u) => [u.symbol, u]));
   const newsCounts = await getNewsCounts();
+  const quality = await loadQualityContext(DATA_DIR, tf);
   const rows: RowData[] = [];
   const excluded: ExcludedEntryBase[] = [];
   const seen = new Set<string>();
@@ -144,74 +146,53 @@ async function computeScan(
     const u = meta.get(symbol);
     const name = u?.name ?? symbol;
 
-    let bars: Bar[];
+    let bars: unknown;
     try {
-      bars = JSON.parse(await readFile(path.join(barDir, f), "utf8")) as Bar[];
+      bars = JSON.parse(await readFile(path.join(barDir, f), "utf8"));
     } catch {
-      // Dosya var ama okunamadı/bozuk JSON — brief'in 3 sebep kodunda ayrı bir karşılığı
-      // yok; en yakını "veri-yok" (kullanılabilir bar verisi fiilen yok).
+      // Dosya var ama okunamadı/bozuk JSON — en yakın sebep kodu "veri-yok".
       excluded.push({ symbol, name, bars: 0, minBars: MIN_BARS, reason: "veri-yok", firstBarAt: null });
       continue;
     }
-    if (!Array.isArray(bars) || bars.length < MIN_BARS) {
-      const n = Array.isArray(bars) ? bars.length : 0;
+
+    const ev = evaluateBars(symbol, bars, tf, now, quality);
+    if (!ev.ok) {
       excluded.push({
         symbol,
         name,
-        bars: n,
+        bars: ev.bars,
         minBars: MIN_BARS,
-        reason: "az-bar",
-        firstBarAt: n > 0 ? bars[0].t : null,
+        reason: ev.reason,
+        firstBarAt: ev.firstBarAt,
+        ...(ev.note ? { note: ev.note } : {}),
       });
       continue;
     }
-
-    try {
-      const ind = indicators(bars, tf);
-      const { score, breakdown } = scoreOf(ind, tf);
-      if (!Number.isFinite(ind.price) || !Number.isFinite(score)) {
-        excluded.push({
-          symbol,
-          name,
-          bars: bars.length,
-          minBars: MIN_BARS,
-          reason: "hesap-hatasi",
-          firstBarAt: bars[0].t,
-        });
-        continue;
-      }
-      const signal = signalOf(score);
-      rows.push({
-        symbol,
-        name,
-        sector: u?.sector ?? "Diğer",
-        price: ind.price,
-        chg: ind.chg,
-        score,
-        signal,
-        k: ind.k,
-        d: ind.d,
-        rsi: ind.rsi,
-        atrPct: ind.atrPct,
-        relVol: ind.relVol,
-        pctB: ind.pctB,
-        hist: ind.hist,
-        histPct: (ind.hist / ind.price) * 100,
-        volTL: ind.volTL,
-        topReason: topReasonOf(breakdown),
-        newsCount: newsCounts[symbol] ?? 0,
-      });
-    } catch {
-      // Motor hatası (ör. dejenere seri) — bu sembolü atla, taramanın kalanını etkilemesin.
-      excluded.push({
-        symbol,
-        name,
-        bars: bars.length,
-        minBars: MIN_BARS,
-        reason: "hesap-hatasi",
-        firstBarAt: bars[0].t,
-      });
-    }
+    const { ind, score, breakdown, signal } = ev;
+    rows.push({
+      symbol,
+      name,
+      sector: u?.sector ?? "Diğer",
+      price: ev.price,
+      chg: ev.chg,
+      score,
+      signal,
+      k: ind.k,
+      d: ind.d,
+      rsi: ind.rsi,
+      atrPct: ind.atrPct,
+      relVol: ind.relVol,
+      pctB: ind.pctB,
+      hist: ind.hist,
+      // Sinyal barının kendi fiyatına oran (canlı fiyata değil) — gösterge ile aynı bar.
+      histPct: (ind.hist / ind.price) * 100,
+      volTL: ind.volTL,
+      topReason: topReasonOf(breakdown),
+      newsCount: newsCounts[symbol] ?? 0,
+      signalAsOf: ev.signalAsOf,
+      lastBarClosed: ev.lastBarClosed,
+      priceAsOf: ev.priceAsOf,
+    });
   }
 
   // Evrende olup bu dilim için hiç bar dosyası olmayan semboller de "veri-yok" (görev §A
@@ -223,31 +204,49 @@ async function computeScan(
 
   rows.sort((a, b) => a.symbol.localeCompare(b.symbol, "tr"));
   excluded.sort((a, b) => a.symbol.localeCompare(b.symbol, "tr"));
-  return { rows, excluded };
+  return { rows, excluded, qualityChecked: quality.own !== null };
 }
 
 /** Bar dizini fingerprint'ine göre önbellekli hesaplama — `getScanRows`/`getExcludedRows`
  * ORTAK bu fonksiyonu kullanır, dosyalar tek seferde okunur/hesaplanır. */
 async function ensureComputed(tf: Timeframe): Promise<CacheEntry> {
   const barDir = path.join(DATA_DIR, "bars", tf);
-  const files = (await readdir(barDir)).filter((f) => f.endsWith(".json"));
+  const files = await listBarFiles(DATA_DIR, tf);
   const fingerprint = await fingerprintDir(barDir, files);
 
   const cached = scanCache.get(tf);
   if (cached && cached.fingerprint === fingerprint) return cached;
 
-  const { rows, excluded } = await computeScan(tf, barDir, files);
-  const fetchedAt = await readFetchedAt(tf);
-  const entry: CacheEntry = { fingerprint, rows, excluded, fetchedAt };
+  const times = await readRunTimes(DATA_DIR, tf);
+  const evaluatedAt = referenceNow(times);
+  const { rows, excluded, qualityChecked } = await computeScan(tf, barDir, files, evaluatedAt);
+  const entry: CacheEntry = { fingerprint, rows, excluded, fetchedAt: times.fetchedAt, evaluatedAt, qualityChecked };
   scanCache.set(tf, entry);
   return entry;
 }
 
 /** Bir zaman dilimi için tarama satırlarını döner; bar dosyaları değişmediyse önbellekten. */
 export async function getScanRows(tf: Timeframe): Promise<ScanResult> {
-  const { rows, fetchedAt } = await ensureComputed(tf);
+  const { rows, fetchedAt, evaluatedAt, qualityChecked } = await ensureComputed(tf);
   const sectors = await getSectorList();
-  return { rows, total: rows.length, fetchedAt, sectors };
+  // Dosya düzeyi özet: satırların ÇOĞUNLUĞUNUN sinyal barı (en sık `signalAsOf`) ve o
+  // çoğunluğun son barının kapanmış olup olmadığı. En büyük değer değil en sık değer: birkaç
+  // hissenin barı farklı olabilir (ör. Yahoo 2026-10-06 günlük satırını çoğu hissede düşürdü).
+  const freq = new Map<number, number>();
+  for (const r of rows) freq.set(r.signalAsOf, (freq.get(r.signalAsOf) ?? 0) + 1);
+  let signalAsOf: number | null = null;
+  for (const [t, c] of freq) if (signalAsOf === null || c > (freq.get(signalAsOf) ?? 0)) signalAsOf = t;
+  const openCount = rows.filter((r) => !r.lastBarClosed).length;
+  return {
+    rows,
+    total: rows.length,
+    fetchedAt,
+    sectors,
+    signalAsOf,
+    lastBarClosed: rows.length ? openCount * 2 <= rows.length : null,
+    evaluatedAt,
+    qualityChecked,
+  };
 }
 
 /**

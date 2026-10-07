@@ -35,8 +35,13 @@ for (const tf of TFS) {
   const body: ScanApiResponse = { tf, ...result };
   const outPath = path.join(OUT_DIR, `scan-${tf}.json`);
   await writeFile(outPath, JSON.stringify(body), "utf8");
+  // Sinyal hangi bardan? (bkz. src/engine/bars.ts — seans içinde son bar açıksa sinyal bir
+  // önceki kapanmış bardan hesaplanır, fiyat/değişim ise en yeni bardan gelir.)
+  const asOf = result.signalAsOf != null ? new Date(result.signalAsOf).toISOString() : "-";
   console.log(
-    `${TF_LABEL[tf]} (${tf}): ${result.rows.length} satır -> ${path.relative(ROOT, outPath)}`,
+    `${TF_LABEL[tf]} (${tf}): ${result.rows.length} satır -> ${path.relative(ROOT, outPath)}  ` +
+      `[sinyal barı ${asOf}, son bar ${result.lastBarClosed ? "kapalı" : "açık (sinyal önceki bardan)"}, ` +
+      `kalite raporu ${result.qualityChecked ? "uygulandı" : "YOK"}]`,
   );
 }
 
