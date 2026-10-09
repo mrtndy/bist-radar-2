@@ -1,5 +1,5 @@
 /**
- * Prototip motorunun kaynağı — hem parity testi hem sektör tohumu bunu kullanır.
+ * Prototip motorunun kaynağı — hem parity testi hem hisse adı tohumu (scripts/build-universe.ts) bunu kullanır.
  *
  * Asıl dosya bu deponun DIŞINDA duruyor (`../design_handoff_bist_radar/bist-data.js`), o yüzden
  * CI'da erişilemez. Depo kendi kendine yeterli olsun diye `reference/` altına birebir kopyalandı.

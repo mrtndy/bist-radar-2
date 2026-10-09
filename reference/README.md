@@ -2,7 +2,8 @@
 
 `bist-data.original.js`, tasarım paketindeki (`design_handoff_bist_radar/bist-data.js`)
 prototip motorunun **birebir kopyasıdır**. Çalışma zamanında kullanılmaz; yalnızca
-`scripts/parity.ts` (motor sapmadı mı) ve `scripts/build-universe.ts` (sektör tohumu) okur.
+`scripts/parity.ts` (motor sapmadı mı) ve `scripts/build-universe.ts` (elle yazılmış kısa hisse
+adları; 2026-10-09'dan beri sektör buradan değil KAP'tan gelir) okur.
 
 Asıl dosya bu deponun dışında durduğu için CI'da erişilemiyordu — depo kendi kendine yeterli
 olsun diye buraya kopyalandı. Geliştirme makinesinde asıl dosya varsa `scripts/prototype-source.ts`

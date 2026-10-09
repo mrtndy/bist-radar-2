@@ -116,10 +116,20 @@ doğrular: günlük skorlama birebir, **ATR dışı bileşenler her dilimde bire
 yapmıyor), ve ölçekleme H/S'de fiilen etkin. Katsayıları yeniden türetmek için
 `node scripts/atr-calibration.ts`.
 
-**2. Sektör bilgisi eksik.** KAP'ta ve İş Yatırım'ın açık uçlarında makinece okunabilir sektör
-alanı yok (İş Yatırım sektör uçları HTTP 401). Şu an prototipin küratörlü 158 hisselik listesinden
-tohumlanıyor: **155 eşleşti, 484 hisse "Diğer".** Kalıcı çözüm BIST sektör endeksi (XBANK, XHOLD…)
-üyeliğini bağlamak.
+**2. ~~Sektör bilgisi eksik.~~ ÇÖZÜLDÜ 2026-10-09.** Eskiden sektör prototipin küratörlü 158
+hisselik listesinden tohumlanıyordu (155 eşleşme, 484 hisse "Diğer"). Artık kaynak KAP'ın
+**Sektörler sayfası** (`https://www.kap.org.tr/tr/Sektorler`): sunucuda çizilen Next.js sayfası
+tüm ana/alt sektör ağacını gömülü JSON olarak taşıyor, **tek istek** (~1 MB) yetiyor
+(`src/providers/kap.ts` `getSectors` / `parseSectorsPage`). İlk canlı koşu: **651 hisseden 650'si
+KAP sektörü aldı**, yalnızca KTEST sayfada yok; "Diğer" kalan 2 hisse (ADEL KAP'ta zaten "Diğer
+İmalat", KTEST), toplam 32 etiket. KAP'ın uzun alt sektör adı (ör. "METAL EŞYA MAKİNE ELEKTRİKLİ
+CİHAZLAR VE ULAŞIM ARAÇLARI") `src/providers/sector-labels.ts`'teki sabit tabloyla kısa etikete
+çevriliyor (48 alt + 16 ana sektör adı; alt sektör tabloda yoksa ana sektörün etiketi, o da yoksa
+"Diğer"). Sayfa okunamazsa `scripts/build-universe.ts` düşmez: her hisse `data/universe.json`'daki
+önceki sektörünü korur, yeni hisseler "Diğer" olur ve CI'da `::warning::` basılır. KAP yeni bir
+sektör adı çıkarırsa CI günlüğünde `::warning::Eşlenmemiş KAP sektörü: <ad> (<n> hisse)` görünür;
+adı tabloya eklemek yeter. Prototip listesi artık yalnızca **ad** için okunuyor: 155 hissede elle
+yazılmış kısa ad ("Türk Hava Yolları"), diğerlerinde KAP unvanı (`shortName`).
 
 **3. Kapsam.** 639 koddan 619'u veri döndürüyor; 20'si Yahoo'da yok (borsa kotundan çıkmış veya
 eski kodlar: `$TGB`, `$TIB`, `$YKB`…). Ayrıca yeni halka arzlar 120 barlık ısınmayı doldurmadığı
@@ -239,5 +249,4 @@ yaklaşık 2 yıllık günlük veri ve tek piyasa rejimi, işlem maliyeti yok, k
 
 - Next.js arayüzü — prototipin birebir yeniden inşası (bkz. `tasks/01-nextjs-ui.md`)
 - KAP poller (seans içi 15–30 sn) + haber → hisse eşlemesi kalıcılaştırma
-- Sektör kaynağı
 - Genel piyasa haber akışı: AA/Dünya/Ekonomim/Investing RSS (doğrulandı, çalışıyor)
